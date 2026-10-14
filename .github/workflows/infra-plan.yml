@@ -1,0 +1,73 @@
+# terraform plan for infra/main, posted as a comment on the branch's open PR (and in the run
+# summary). Experiment tier (read-only).
+#
+# Triggered by pushes to non-main branches, not by PR events, so outsiders can never start
+# it (see pr.yml). If the branch has no open PR yet, the plan is only in the run summary;
+# re-run with `gh workflow run infra-plan.yml --ref <branch>` after opening the PR.
+name: infra-plan
+
+on:
+  push:
+    branches-ignore: [main]
+    # ops/guard/janitor is deployed by infra/main (janitor.tf), so code changes there redeploy it.
+    paths: ["infra/main/**", "ops/guard/janitor/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: infra-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: plan
+        working-directory: infra/main
+        run: |
+          terraform init -input=false -backend-config="bucket=${TF_VAR_project_id}-tfstate"
+          set +e
+          terraform plan -input=false -lock=false -no-color -out=tfplan > plan.txt 2>&1
+          echo "PLAN_EXIT=$?" >> "$GITHUB_ENV"
+          rm -f tfplan
+      - name: comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('infra/main/plan.txt', 'utf8');
+            if (plan.length > 60000) plan = plan.slice(-60000);
+            const status = process.env.PLAN_EXIT === '0' ? 'succeeded' : 'FAILED';
+            const sha = context.sha.slice(0, 12);
+            const body = `### terraform plan (infra/main) ${status} at ${sha}\n\n<details><summary>Plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await core.summary.addRaw(body).write();
+            const branch = context.ref.replace('refs/heads/', '');
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner, repo: context.repo.repo,
+              head: `${context.repo.owner}:${branch}`, state: 'open',
+            });
+            if (prs.length === 0) core.notice(`No open PR for ${branch}; plan is in the run summary.`);
+            for (const pr of prs) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body,
+              });
+            }
+      - run: exit "$PLAN_EXIT"

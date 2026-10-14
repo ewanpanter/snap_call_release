@@ -1,0 +1,347 @@
+{
+  "$defs": {
+    "LatencyStats": {
+      "additionalProperties": false,
+      "properties": {
+        "mean_ms": {
+          "minimum": 0,
+          "title": "Mean Ms",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "p50_ms": {
+          "minimum": 0,
+          "title": "P50 Ms",
+          "type": "number"
+        },
+        "p95_ms": {
+          "minimum": 0,
+          "title": "P95 Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "n",
+        "mean_ms",
+        "p50_ms",
+        "p95_ms"
+      ],
+      "title": "LatencyStats",
+      "type": "object"
+    },
+    "ReliabilityBin": {
+      "additionalProperties": false,
+      "properties": {
+        "accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Accuracy"
+        },
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "hi": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Hi",
+          "type": "number"
+        },
+        "lo": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Lo",
+          "type": "number"
+        },
+        "mean_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Mean Confidence"
+        }
+      },
+      "required": [
+        "lo",
+        "hi",
+        "count",
+        "mean_confidence",
+        "accuracy"
+      ],
+      "title": "ReliabilityBin",
+      "type": "object"
+    },
+    "TypeMetrics": {
+      "additionalProperties": false,
+      "description": "Metrics over a set of predictions (all, one type, or one question id).\n\naccuracy: top answer == gold (yesno: p_yes >= 0.5). ece: expected calibration error of\nthe top-answer probability, 10 equal-width bins. brier: multi-class Brier score (sum of\nsquared errors over the answer keys). mae: score only, |value - gold index|.",
+      "properties": {
+        "accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accuracy"
+        },
+        "brier": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brier"
+        },
+        "ece": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ece"
+        },
+        "log_loss": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Loss"
+        },
+        "mae": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mae"
+        },
+        "n": {
+          "minimum": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "n_errors": {
+          "default": 0,
+          "minimum": 0,
+          "title": "N Errors",
+          "type": "integer"
+        },
+        "reliability": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ReliabilityBin"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reliability"
+        }
+      },
+      "required": [
+        "n"
+      ],
+      "title": "TypeMetrics",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "by_question": {
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]{1,64}$": {
+          "$ref": "#/$defs/TypeMetrics"
+        }
+      },
+      "title": "By Question",
+      "type": "object"
+    },
+    "by_type": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TypeMetrics"
+      },
+      "propertyNames": {
+        "enum": [
+          "choice",
+          "score",
+          "yesno"
+        ]
+      },
+      "title": "By Type",
+      "type": "object"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dataset"
+    },
+    "extra": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Extra",
+      "type": "object"
+    },
+    "latency": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LatencyStats"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "n_questions": {
+      "minimum": 0,
+      "title": "N Questions",
+      "type": "integer"
+    },
+    "n_states": {
+      "minimum": 0,
+      "title": "N States",
+      "type": "integer"
+    },
+    "order_sensitivity": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Order Sensitivity"
+    },
+    "overall": {
+      "$ref": "#/$defs/TypeMetrics"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "val",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "system": {
+      "title": "System",
+      "type": "string"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "enum": [
+              "choice",
+              "score",
+              "yesno"
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature"
+    }
+  },
+  "required": [
+    "system",
+    "split",
+    "created_at",
+    "n_states",
+    "n_questions",
+    "overall"
+  ],
+  "title": "Metrics",
+  "type": "object"
+}

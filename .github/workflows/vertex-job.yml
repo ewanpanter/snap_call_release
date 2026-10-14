@@ -1,0 +1,141 @@
+# LEGACY (superseded by the burst runner, run-gpu.yml; Decision 9). Kept for reference.
+# Reusable: build the thin code image, submit one Vertex custom job, and exit (Decision 2).
+# The runner doesn't sit idle burning Actions minutes while the GPU works; outputs come back
+# later via fetch-results.yml. Called by experiment.yml and train.yml. Experiment tier.
+name: vertex-job
+
+on:
+  workflow_call:
+    inputs:
+      module:
+        type: string
+        required: true
+      args:
+        type: string
+        default: ""
+      gpu:
+        type: boolean
+        default: true
+      # GPU runs only; CPU runs use submit_job.py's CPU default.
+      machine_type:
+        type: string
+        default: g2-standard-4
+      run_id_prefix:
+        type: string
+        default: exp
+      # Vertex region for this run; blank = vars.VERTEX_REGION (else GCP_REGION). Must be one
+      # of vars.VERTEX_REGIONS, which each have their own models bucket and image repo.
+      region:
+        type: string
+        default: ""
+      # GPU runs: Dynamic Workload Scheduler. If no L4 is free, Vertex queues the job (up
+      # to 24h; queueing is free, and the janitor allows 24h15m for jobs not yet started)
+      # instead of failing and retrying; it starts at once when one is free. The 2h run
+      # limit still applies once it starts. Needs the preemptible L4 Vertex quota.
+      flex_start:
+        type: boolean
+        default: true
+    outputs:
+      run_id:
+        value: ${{ jobs.run.outputs.run_id }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    # Build + submit only; the Vertex job itself has its own 2h timeout.
+    timeout-minutes: 20
+    # Serialises submissions; the "no GPU job already active" step below does the rest.
+    concurrency:
+      group: ${{ inputs.gpu && 'vertex-gpu' || format('vertex-cpu-{0}', github.run_id) }}
+      cancel-in-progress: false
+    outputs:
+      run_id: ${{ steps.ids.outputs.run_id }}
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      REGIONS: ${{ vars.VERTEX_REGIONS || vars.GCP_REGION }}
+      JOB_REGION: ${{ inputs.region || vars.VERTEX_REGION || vars.GCP_REGION }}
+      # Image repo in the job's own region (base-image.yml pushes the base to all of them).
+      AR: ${{ inputs.region || vars.VERTEX_REGION || vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/snapcall
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      # Inputs go through env, never straight into shell (injection).
+      MODULE: ${{ inputs.module }}
+      ARGS: ${{ inputs.args }}
+      GPU: ${{ inputs.gpu }}
+      MACHINE_TYPE: ${{ inputs.machine_type }}
+      FLEX_START: ${{ inputs.flex_start }}
+      PREFIX: ${{ inputs.run_id_prefix }}
+    steps:
+      - name: validate inputs
+        run: |
+          [[ "$MODULE" =~ ^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$ ]] || { echo "bad module name"; exit 1; }
+          [[ "$MACHINE_TYPE" =~ ^g2-standard-(4|8)$ ]] || { echo "machine_type must be g2-standard-4 or g2-standard-8"; exit 1; }
+          [[ "$PREFIX" =~ ^[a-z][a-z0-9-]{0,15}$ ]] || { echo "bad run_id_prefix"; exit 1; }
+          [[ " $REGIONS " == *" $JOB_REGION "* ]] || { echo "region $JOB_REGION isn't in VERTEX_REGIONS ($REGIONS)"; exit 1; }
+          # Weights in the job's region: the home region keeps the original bucket name.
+          if [ "$JOB_REGION" = "$REGION" ]; then MODELS="$PROJECT-models"; else MODELS="$PROJECT-models-$JOB_REGION"; fi
+          echo "MODELS_DIR=/gcs/$MODELS" >> "$GITHUB_ENV"
+      - id: ids
+        run: echo "run_id=$PREFIX-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: refuse if a GPU job is already active in any region (one GPU at a time)
+        if: inputs.gpu
+        run: |
+          active="$(for r in $REGIONS; do
+            gcloud ai custom-jobs list --project "$PROJECT" --region "$r" \
+              --filter='state=JOB_STATE_QUEUED OR state=JOB_STATE_PENDING OR state=JOB_STATE_RUNNING' \
+              --format='value(displayName,state,jobSpec.workerPoolSpecs[0].machineSpec.acceleratorType)' \
+              | awk -F'\t' -v r="$r" '$3 != "" {print r": "$0}'
+          done)"
+          if [ -n "$active" ]; then
+            echo "::error::A GPU job is still active. Wait for it (fetch-results.yml) before submitting another:"
+            echo "$active"
+            exit 1
+          fi
+      - name: build and push thin image
+        run: |
+          gcloud auth configure-docker "$JOB_REGION-docker.pkg.dev" --quiet
+          IMAGE="$AR/snapcall:${GITHUB_SHA::12}"
+          docker build -f docker/Dockerfile.train --build-arg BASE_IMAGE="$AR/base:latest" -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - name: submit Vertex job (no wait)
+        env:
+          RUN_ID: ${{ steps.ids.outputs.run_id }}
+        run: |
+          GPU_FLAGS=(); [ "$GPU" = "true" ] && GPU_FLAGS=(--gpu --machine-type "$MACHINE_TYPE")
+          [ "$GPU" = "true" ] && [ "$FLEX_START" = "true" ] && GPU_FLAGS+=(--flex-start --max-wait 24h)
+          uv run python scripts/submit_job.py \
+            --project "$PROJECT" --region "$JOB_REGION" --image "$IMAGE" \
+            --module "$MODULE" --args "$ARGS" --run-id "$RUN_ID" \
+            --output-uri "$SCRATCH/runs/$RUN_ID/outputs" \
+            --service-account "rt-train@$PROJECT.iam.gserviceaccount.com" \
+            --models-dir "$MODELS_DIR" "${GPU_FLAGS[@]}" --timeout 2h
+          # On-demand, not Spot: Spot is cheaper but can be preempted and can wait longer
+          # for capacity.
+      - name: how to get the results
+        env:
+          RUN_ID: ${{ steps.ids.outputs.run_id }}
+        run: |
+          {
+            echo "### Submitted Vertex job \`$RUN_ID\` in $JOB_REGION"
+            echo
+            echo "When it has finished (GPU runs: usually 5-60 min, 2h at most):"
+            echo
+            echo '```'
+            echo "gh workflow run fetch-results.yml -f run_id=$RUN_ID [-f wait_minutes=30]"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=run_id::$RUN_ID  ->  gh workflow run fetch-results.yml -f run_id=$RUN_ID"

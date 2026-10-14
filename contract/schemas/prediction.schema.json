@@ -1,0 +1,142 @@
+{
+  "additionalProperties": false,
+  "description": "One system's answer to one question.\n\n``answer``: choice -> option key, score -> most probable level index, yesno -> bool.\n``value``: score only, the expected level index.\n``latency_ms``: wall time of the whole request this question was part of (put the\nrequest's question count and debias setting in ``meta`` for the latency sweep).\n``error``: set when the system failed on this question; answer/probabilities are then null.",
+  "properties": {
+    "answer": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Answer"
+    },
+    "confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confidence"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "latency_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latency Ms"
+    },
+    "meta": {
+      "additionalProperties": true,
+      "title": "Meta",
+      "type": "object"
+    },
+    "probabilities": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Probabilities"
+    },
+    "question_id": {
+      "pattern": "^[A-Za-z0-9_\\-]{1,64}$",
+      "title": "Question Id",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "state_id": {
+      "minLength": 1,
+      "title": "State Id",
+      "type": "string"
+    },
+    "system": {
+      "minLength": 1,
+      "title": "System",
+      "type": "string"
+    },
+    "type": {
+      "enum": [
+        "choice",
+        "score",
+        "yesno"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Value"
+    }
+  },
+  "required": [
+    "system",
+    "state_id",
+    "question_id",
+    "type",
+    "answer",
+    "probabilities"
+  ],
+  "title": "Prediction",
+  "type": "object"
+}

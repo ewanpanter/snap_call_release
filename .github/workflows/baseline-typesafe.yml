@@ -1,0 +1,69 @@
+# Jev baseline. RELEASE tier: main only, triggered by the repo owner (RELEASE_ACTOR). The
+# only workflow that reads a secret. The key goes into an env var for one step, masked, and is never written
+# to disk or printed. Don't add `set -x` or debug logging here.
+name: baseline-typesafe
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra arguments for baselines.typesafe_client (e.g. --limit 50)"
+        required: false
+        default: ""
+        type: string
+      data:
+        description: "Data file in the scratch bucket's data/ folder (e.g. cfpb_test.jsonl)"
+        required: false
+        default: "test.jsonl"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    # Defence in depth: the WIF provider enforces the same ref/actor conditions in GCP.
+    if: github.ref == 'refs/heads/main' && vars.RELEASE_ACTOR != '' && github.actor == vars.RELEASE_ACTOR && github.triggering_actor == vars.RELEASE_ACTOR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      RUN_ID: typesafe-${{ github.run_id }}-${{ github.run_attempt }}
+      ARGS: ${{ inputs.args }}
+      DATA_FILE: ${{ inputs.data }}
+      # Secret Manager secret holding the key; must match infra/main's typesafe_secret_id.
+      SECRET_ID: ${{ vars.TYPESAFE_SECRET_ID || 'typesafe-api-key' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_RELEASE }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: fetch the data file
+        run: |
+          # a plain name under data/ (one sub-folder at most), never a path out of it
+          [[ "$DATA_FILE" =~ ^[a-z0-9_-]+(/[a-z0-9_-]+)?\.jsonl$ ]] || { echo "bad data: $DATA_FILE"; exit 1; }
+          mkdir -p data_in outputs && gcloud storage cp "$SCRATCH/data/$DATA_FILE" data_in/data.jsonl
+      - name: run baseline
+        run: |
+          TYPESAFE_API_KEY="$(gcloud secrets versions access latest --secret="$SECRET_ID" --project="$PROJECT")"
+          echo "::add-mask::$TYPESAFE_API_KEY"
+          export TYPESAFE_API_KEY
+          uv run python -m baselines.typesafe_client \
+            --data data_in/data.jsonl --run-id "$RUN_ID" --out outputs/ $ARGS
+      - name: keep a copy in scratch
+        if: always()
+        run: gcloud storage cp -r outputs/* "$SCRATCH/runs/$RUN_ID/outputs/" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: outputs-${{ env.RUN_ID }}
+          path: outputs/
+          retention-days: 7

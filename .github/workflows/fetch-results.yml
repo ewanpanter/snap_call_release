@@ -1,0 +1,242 @@
+# Bring a finished GPU job's outputs back as an Actions artifact (Decision 2).
+#   gh workflow run fetch-results.yml -f run_id=exp-123456789-1 [-f wait_minutes=10]
+#   gh run download <this run's id>        # -> outputs-<run_id>/
+#
+# Works for both kinds of run. Burst-runner runs (run-gpu.yml, Decision 9) are recognised by
+# scratch/runs/<run_id>/launch.json: the VM writes done.json there after copying outputs/,
+# then deletes itself. A VM that vanished without done.json was killed (2h max-run-duration
+# or the janitor); whatever it had saved is still fetched, and the run fails.
+# A Vertex job is found by its display name, which submit_job.py sets to the run id. If it's still
+# queued or running, this run succeeds with a notice and uploads nothing; try again later (or
+# pass wait_minutes to poll, up to 15, so the runner only idles when you ask it to).
+# Waiting is billed Actions time: launch a fetch near the expected end of the job with a
+# short wait, rather than one long wait.
+# Experiment tier.
+name: fetch-results
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id printed by experiment.yml / train.yml (e.g. exp-123456789-1)"
+        required: true
+        type: string
+      wait_minutes:
+        description: "Poll this long (0-15) for the job to finish before giving up"
+        required: false
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fetch-results-${{ inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # Burst runner or Vertex? Only runner runs have a launch.json in scratch.
+  locate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      kind: ${{ steps.kind.outputs.kind }}
+    env:
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - name: validate inputs
+        run: '[[ "$RUN_ID" =~ ^[a-z][a-z0-9-]{0,15}-[0-9]+-[0-9]+$ ]] || { echo "bad run_id"; exit 1; }'
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - id: kind
+        run: |
+          if gcloud storage ls "$SCRATCH/runs/$RUN_ID/launch.json" > /dev/null 2>&1; then
+            echo "kind=runner" >> "$GITHUB_OUTPUT"; echo "$RUN_ID: burst-runner run"
+          else
+            echo "kind=vertex" >> "$GITHUB_OUTPUT"; echo "$RUN_ID: Vertex job"
+          fi
+
+  fetch:
+    needs: locate
+    if: needs.locate.outputs.kind == 'vertex'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      state: ${{ steps.wait.outputs.state }}
+      finished: ${{ steps.wait.outputs.finished }}
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      # The job may have run in any Vertex region; it's found by display name.
+      REGIONS: ${{ vars.VERTEX_REGIONS || vars.GCP_REGION }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      # Inputs go through env, never straight into shell (injection).
+      RUN_ID: ${{ inputs.run_id }}
+      WAIT_MINUTES: ${{ inputs.wait_minutes }}
+    steps:
+      - name: validate inputs
+        run: |
+          [[ "$RUN_ID" =~ ^[a-z][a-z0-9-]{0,15}-[0-9]+-[0-9]+$ ]] || { echo "bad run_id"; exit 1; }
+          [[ "$WAIT_MINUTES" =~ ^[0-9]+$ ]] && [ "$WAIT_MINUTES" -le 15 ] || { echo "wait_minutes must be 0-15"; exit 1; }
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: find the job and wait for it
+        id: wait
+        run: |
+          JOB=""
+          for REGION in $REGIONS; do
+            JOB="$(gcloud ai custom-jobs list --project "$PROJECT" --region "$REGION" \
+              --filter="displayName=$RUN_ID" --format='value(name)' --limit=1)"
+            [ -z "$JOB" ] || break
+          done
+          [ -n "$JOB" ] || { echo "::error::No Vertex job with display name $RUN_ID in $REGIONS"; exit 1; }
+          echo "Found $JOB in $REGION"
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+          echo "REGION=$REGION" >> "$GITHUB_ENV"
+          deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+          FINISHED=false
+          while :; do
+            STATE="$(gcloud ai custom-jobs describe "$JOB" --region "$REGION" --format='value(state)')"
+            case "$STATE" in
+              JOB_STATE_SUCCEEDED|JOB_STATE_FAILED|JOB_STATE_CANCELLED|JOB_STATE_EXPIRED) FINISHED=true; break ;;
+            esac
+            [ "$(date +%s)" -lt "$deadline" ] || break
+            echo "$STATE, checking again in 60s"
+            sleep 60
+          done
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
+          echo "finished=$FINISHED" >> "$GITHUB_OUTPUT"
+          echo "STATE=$STATE" >> "$GITHUB_ENV"
+          echo "Vertex job $JOB: $STATE"
+      - name: not finished yet
+        if: steps.wait.outputs.finished != 'true'
+        run: |
+          echo "::notice title=not finished::$RUN_ID is $STATE. No artifact uploaded; run fetch-results again later."
+          echo "### $RUN_ID is still \`$STATE\`: no artifact yet, try again later" >> "$GITHUB_STEP_SUMMARY"
+      - name: download outputs, job record and log
+        id: download
+        if: steps.wait.outputs.finished == 'true'
+        run: |
+          mkdir -p outputs
+          gcloud storage cp -r "$SCRATCH/runs/$RUN_ID/outputs/*" outputs/ || echo "::warning::no outputs written"
+          gcloud ai custom-jobs describe "$JOB" --region "$REGION" --format=json > outputs/_vertex_job.json
+          # Last 2000 log lines, oldest first.
+          gcloud logging read --project "$PROJECT" --limit 2000 --format='value(textPayload)' \
+            "resource.type=\"ml_job\" AND resource.labels.job_id=\"${JOB##*/}\"" \
+            | tac > outputs/_vertex_log.txt || echo "::warning::couldn't read the job log"
+          echo "### $RUN_ID: \`$STATE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`gh run download $GITHUB_RUN_ID\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.download.outcome == 'success'
+        with:
+          name: outputs-${{ inputs.run_id }}
+          path: outputs/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: fail if the job failed
+        if: steps.download.outcome == 'success' && steps.wait.outputs.state != 'JOB_STATE_SUCCEEDED'
+        run: |
+          echo "::error::Vertex job $RUN_ID ended $STATE (outputs and log are in the artifact)"
+          exit 1
+
+  fetch-runner:
+    needs: locate
+    if: needs.locate.outputs.kind == 'runner'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      RUN_ID: ${{ inputs.run_id }}
+      WAIT_MINUTES: ${{ inputs.wait_minutes }}
+    steps:
+      - name: validate inputs
+        run: |
+          [[ "$RUN_ID" =~ ^[a-z][a-z0-9-]{0,15}-[0-9]+-[0-9]+$ ]] || { echo "bad run_id"; exit 1; }
+          [[ "$WAIT_MINUTES" =~ ^[0-9]+$ ]] && [ "$WAIT_MINUTES" -le 15 ] || { echo "wait_minutes must be 0-15"; exit 1; }
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: wait for the VM to finish
+        id: wait
+        run: |
+          RUN="$SCRATCH/runs/$RUN_ID"
+          gcloud storage cat "$RUN/launch.json" > launch.json
+          RESULT="$(jq -r .result launch.json)"
+          if [ "$RESULT" != created ]; then
+            echo "::error::No VM was created for $RUN_ID ($RESULT); see launch.json in the run-gpu run"
+            exit 1
+          fi
+          VM="$(jq -r .vm launch.json)"; ZONE="$(jq -r .zone launch.json)"
+          echo "$RUN_ID ran on $VM in $ZONE (capacity search $(jq -r .search_seconds launch.json)s)"
+          deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+          while :; do
+            if gcloud storage cat "$RUN/done.json" > done.json 2>/dev/null; then
+              STATE=done; break
+            fi
+            if ! STATUS="$(gcloud compute instances describe "$VM" --zone "$ZONE" --project "$PROJECT" \
+                  --format='value(status)' 2>/dev/null)"; then
+              # Gone. It writes done.json before deleting itself, so check once more.
+              if gcloud storage cat "$RUN/done.json" > done.json 2>/dev/null; then STATE=done; else STATE=vanished; fi
+              break
+            fi
+            STATE="$STATUS"
+            [ "$(date +%s)" -lt "$deadline" ] || break
+            echo "VM is $STATUS, checking again in 60s"
+            sleep 60
+          done
+          FINISHED=false; [ "$STATE" = done ] || [ "$STATE" = vanished ] && FINISHED=true
+          EXIT_CODE="$( [ "$STATE" = done ] && jq -r .exit_code done.json || echo "")"
+          {
+            echo "state=$STATE"; echo "finished=$FINISHED"; echo "exit_code=$EXIT_CODE"
+          } >> "$GITHUB_OUTPUT"
+          echo "STATE=$STATE" >> "$GITHUB_ENV"
+          echo "Runner $RUN_ID: $STATE ${EXIT_CODE:+(exit $EXIT_CODE)}"
+      - name: not finished yet
+        if: steps.wait.outputs.finished != 'true'
+        run: |
+          echo "::notice title=not finished::$RUN_ID is $STATE. No artifact uploaded; run fetch-results again later."
+          echo "### $RUN_ID is still \`$STATE\`: no artifact yet, try again later" >> "$GITHUB_STEP_SUMMARY"
+      - name: download outputs, launch record and log
+        id: download
+        if: steps.wait.outputs.finished == 'true'
+        run: |
+          RUN="$SCRATCH/runs/$RUN_ID"
+          mkdir -p outputs
+          gcloud storage cp -r "$RUN/outputs/*" outputs/ || echo "::warning::no outputs written"
+          cp launch.json outputs/_runner_launch.json
+          [ -f done.json ] && [ "$STATE" = done ] && cp done.json outputs/_runner_done.json
+          if [ "$STATE" = vanished ]; then
+            gcloud storage cp "$RUN/_runner_log_partial.txt" outputs/ || echo "::warning::no partial log"
+          fi
+          {
+            echo "### $RUN_ID: \`$STATE\` in $(jq -r .zone launch.json)"
+            echo
+            echo "Capacity search $(jq -r .search_seconds launch.json)s over $(jq -r .zones_tried launch.json) zone(s)."
+            [ -f outputs/_runner_timings.json ] && echo && echo "Phases (s): \`$(jq -c .phases_seconds outputs/_runner_timings.json)\`"
+            echo
+            echo "\`gh run download $GITHUB_RUN_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.download.outcome == 'success'
+        with:
+          name: outputs-${{ inputs.run_id }}
+          path: outputs/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: fail if the job failed
+        if: steps.download.outcome == 'success' && (steps.wait.outputs.state != 'done' || steps.wait.outputs.exit_code != '0')
+        env:
+          EXIT_CODE: ${{ steps.wait.outputs.exit_code || 'unknown' }}
+        run: |
+          echo "::error::Runner job $RUN_ID ended $STATE (exit $EXIT_CODE); outputs and log are in the artifact"
+          exit 1

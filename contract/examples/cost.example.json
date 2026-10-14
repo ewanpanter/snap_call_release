@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "run_id": "exp-20260927-01",
+  "job": "experiment.yml:eval.run_eval",
+  "system": "snapcall-4b-zeroshot",
+  "created_at": "2026-09-27T18:05:00Z",
+  "currency": "GBP",
+  "compute": [
+    {"resource": "nvidia-l4", "count": 1, "minutes": 12.5, "spot": true, "rate_per_hour": 0.4, "cost": 0.08333333}
+  ],
+  "api": [],
+  "total": 0.08333333,
+  "n_decisions": 3200,
+  "notes": "Example only. rate_per_hour is illustrative; check current pricing."
+}

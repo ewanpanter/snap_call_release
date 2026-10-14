@@ -1,0 +1,4 @@
+# The base image only needs the lock file. (BuildKit reads <Dockerfile>.dockerignore.)
+*
+!pyproject.toml
+!uv.lock

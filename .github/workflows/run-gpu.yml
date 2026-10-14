@@ -1,0 +1,173 @@
+# Run any module on a GCE burst-runner GPU VM (Decision 9), then exit (Decision 2):
+#   gh workflow run run-gpu.yml -f script=snapcall.decide -f args="smoke --model {models}/Qwen/Qwen3-0.6B"
+# Weights: write {models}/<HF repo id> in the args. The VM copies it from the models bucket
+# in its own region if there is one (us-central1, europe-west4), else from Hugging Face.
+# For Qwen3-8B add -f machine_type=g2-standard-8.
+# -f regions="us-central1 europe-west4 ..." replaces the try-list for this one run (e.g. to
+# start where L4s are scarce and watch the search move on); blank = RUNNER_REGIONS.
+#
+# Tries every L4 zone of each region in RUNNER_REGIONS, in order, and runs where the first
+# create succeeds (usually within a minute or two). Refuses if RUNNER_MAX_VMS runner VMs
+# already exist. The VM deletes itself when the job ends; Google deletes it at 2h anyway.
+# When it's done:
+#   gh workflow run fetch-results.yml -f run_id=gce-<this run's id>-<attempt>   (printed in the summary)
+#   gh run download <fetch-results run id>
+# Experiment tier.
+name: run-gpu
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Python module to run as `python -m <script>` (e.g. eval.run_eval)"
+        required: true
+        type: string
+      args:
+        description: "Arguments passed to the module ({models}/<org>/<name> for weights)"
+        required: false
+        default: ""
+        type: string
+      machine_type:
+        description: "Both have 1x L4. Use g2-standard-8 for 8B."
+        required: false
+        default: g2-standard-4
+        type: choice
+        options:
+          - g2-standard-4
+          - g2-standard-8
+      image_family:
+        description: "Deep Learning VM image family (blank = newest common-cu* with a driver)"
+        required: false
+        default: ""
+        type: string
+      regions:
+        description: "Try-list for this run only, space-separated, in order (blank = RUNNER_REGIONS)"
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      script:
+        type: string
+        required: true
+      args:
+        type: string
+        default: ""
+      machine_type:
+        type: string
+        default: g2-standard-4
+      image_family:
+        type: string
+        default: ""
+      regions:
+        type: string
+        default: ""
+      run_id_prefix:
+        type: string
+        default: gce
+    outputs:
+      run_id:
+        value: ${{ jobs.launch.outputs.run_id }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  launch:
+    runs-on: ubuntu-24.04
+    # The search itself gives up after 20 minutes.
+    timeout-minutes: 30
+    # One launch at a time, so two runs can't both pass the RUNNER_MAX_VMS check.
+    concurrency:
+      group: runner-launch
+      cancel-in-progress: false
+    outputs:
+      run_id: ${{ steps.ids.outputs.run_id }}
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      HOME_REGION: ${{ vars.GCP_REGION }}
+      VERTEX_REGIONS: ${{ vars.VERTEX_REGIONS || vars.GCP_REGION }}
+      RUNNER_REGIONS: ${{ inputs.regions || vars.RUNNER_REGIONS }}
+      RUNNER_MAX_VMS: ${{ vars.RUNNER_MAX_VMS || '1' }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      # Inputs go through env, never straight into shell (injection).
+      MODULE: ${{ inputs.script }}
+      ARGS: ${{ inputs.args }}
+      MACHINE_TYPE: ${{ inputs.machine_type }}
+      IMAGE_FAMILY: ${{ inputs.image_family }}
+      PREFIX: ${{ inputs.run_id_prefix || 'gce' }}
+    steps:
+      - name: validate inputs
+        run: |
+          [[ "$MODULE" =~ ^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$ ]] || { echo "bad module name"; exit 1; }
+          [[ "$MACHINE_TYPE" =~ ^g2-standard-(4|8)$ ]] || { echo "machine_type must be g2-standard-4 or g2-standard-8"; exit 1; }
+          [[ "$PREFIX" =~ ^[a-z][a-z0-9-]{0,15}$ ]] || { echo "bad run_id_prefix"; exit 1; }
+          [[ -z "$IMAGE_FAMILY" || "$IMAGE_FAMILY" =~ ^[a-z0-9-]{1,63}$ ]] || { echo "bad image_family"; exit 1; }
+          [ -n "$RUNNER_REGIONS" ] || { echo "::error::Set the RUNNER_REGIONS repo variable first"; exit 1; }
+          [[ "$RUNNER_REGIONS" =~ ^[a-z0-9\ -]+$ ]] || { echo "bad regions"; exit 1; }
+          echo "Try-list: $RUNNER_REGIONS"
+          [[ "$RUNNER_MAX_VMS" =~ ^[1-9][0-9]*$ ]] || { echo "RUNNER_MAX_VMS must be a positive number"; exit 1; }
+      - id: ids
+        run: echo "run_id=$PREFIX-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: upload this commit's code to scratch
+        env:
+          RUN_ID: ${{ steps.ids.outputs.run_id }}
+        run: |
+          # Tracked files only: no .env, no local state. The VM installs it with uv.
+          git archive --format=tar.gz -o code.tar.gz HEAD
+          gcloud storage cp code.tar.gz "$SCRATCH/runs/$RUN_ID/code.tar.gz"
+      - name: find an L4 and create the VM (no wait for the job)
+        id: launch
+        env:
+          RUN_ID: ${{ steps.ids.outputs.run_id }}
+        run: |
+          BUCKETS="$(python3 -c 'import sys; sys.path.insert(0, "ops/runner"); import launch; print(launch.models_buckets(*sys.argv[1:3], sys.argv[3].split()))' "$PROJECT" "$HOME_REGION" "$VERTEX_REGIONS")"
+          set +e
+          python3 ops/runner/launch.py \
+            --project "$PROJECT" --regions "$RUNNER_REGIONS" --max-vms "$RUNNER_MAX_VMS" \
+            --run-id "$RUN_ID" --module "$MODULE" --args "$ARGS" --machine-type "$MACHINE_TYPE" \
+            --scratch "$SCRATCH" --code-uri "$SCRATCH/runs/$RUN_ID/code.tar.gz" \
+            --models-buckets "$BUCKETS" --git-sha "$GITHUB_SHA" --image-family "$IMAGE_FAMILY" \
+            --out launch.json
+          rc=$?
+          set -e
+          if [ -f launch.json ]; then
+            gcloud storage cp launch.json "$SCRATCH/runs/$RUN_ID/launch.json"
+          fi
+          exit $rc
+      - name: summary
+        if: always() && hashFiles('launch.json') != ''
+        env:
+          RUN_ID: ${{ steps.ids.outputs.run_id }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          l = json.load(open("launch.json"))
+          rid = os.environ["RUN_ID"]
+          if l["result"] == "created":
+              print(f"### `{rid}` is running on `{l['vm']}` in **{l['zone']}**")
+              print(f"Capacity search: **{l['search_seconds']}s**, {l['zones_tried']} zone(s) tried. Image `{l['image']}`.\n")
+              print("When it has finished (it deletes itself; 2h at most):\n")
+              print(f"```\ngh workflow run fetch-results.yml -f run_id={rid} [-f wait_minutes=30]\n```\n")
+          else:
+              print(f"### `{rid}`: no VM created ({l['result']}), {l['zones_tried']} zone(s) tried in {l['search_seconds']}s\n")
+          print("| zone | outcome | seconds |\n|---|---|---|")
+          for a in l["attempts"]:
+              print(f"| {a['zone']} | {a['outcome']} | {a['seconds']} |")
+          PY
+          if [ "$(python3 -c 'import json; print(json.load(open("launch.json"))["result"])')" = created ]; then
+            echo "::notice title=run_id::$RUN_ID  ->  gh workflow run fetch-results.yml -f run_id=$RUN_ID"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && hashFiles('launch.json') != ''
+        with:
+          name: launch-${{ steps.ids.outputs.run_id }}
+          path: launch.json
+          retention-days: 7

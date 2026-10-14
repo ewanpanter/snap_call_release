@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars (which .gitignore keeps out of git) and fill in your own values.
+# These are identifiers, not secrets, but they belong to your deployment.
+
+# Your GCP project id.
+project_id = "my-snapcall-project"
+
+# Home region for buckets, functions and the state bucket.
+region = "us-central1"
+
+# Numeric id of your GitHub repo: gh api repos/<owner>/<repo> --jq .id
+github_repository_id = "000000000"
+
+# Numeric GitHub user id of the repo owner: gh api users/<owner> --jq .id
+# Also set the RELEASE_ACTOR repo variable to the same account's username.
+github_owner_id = "00000000"
+
+# Optional: numeric user id of a second account (e.g. a bot) allowed to run Experiment-tier
+# workflows. Leave empty for none.
+github_bot_id = ""
+
+# Secret Manager secret for the Jev API key. Must match infra/main's variable of the same name.
+# typesafe_secret_id = "typesafe-api-key"
+
+# Regions Vertex jobs may run in (legacy path). Keep in sync with infra/main.
+# vertex_regions = ["us-central1", "europe-west4"]

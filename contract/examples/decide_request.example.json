@@ -1,0 +1,10 @@
+{
+  "state": "Subject: Charged twice for September\n\nHi, my card was billed twice for my mobile plan this month. Please refund the duplicate charge.",
+  "questions": {
+    "queue": {"type": "choice", "question": "Which queue should handle this ticket?", "options": {"billing": "Billing and Payments", "technical": "Technical Support", "sales": "Sales and Pre-Sales"}},
+    "priority": {"type": "score", "question": "How urgent is this ticket?", "levels": ["low", "medium", "high", "critical"]},
+    "is_billing": {"type": "yesno", "question": "This ticket is about a billing or refund issue."}
+  },
+  "debias": "auto",
+  "seed": 0
+}

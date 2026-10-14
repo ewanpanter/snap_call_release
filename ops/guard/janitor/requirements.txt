@@ -1,0 +1,5 @@
+functions-framework>=3.8,<4
+google-cloud-aiplatform>=1.70,<3
+google-cloud-compute>=1.19,<2
+google-cloud-run>=0.10,<1
+google-cloud-storage>=2.18,<4

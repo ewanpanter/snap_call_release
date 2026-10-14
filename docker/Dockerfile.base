@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1
+# Heavy base image: Python 3.12, CUDA torch, transformers, PEFT. Built rarely, by
+# base-image.yml; experiment images add a thin code layer on top (Dockerfile.train).
+#
+# Slim on purpose: no nvidia/cuda base. The torch cu126 wheel brings its own CUDA runtime
+# libraries (as nvidia-* wheels) and the Vertex host provides the driver. cu126 works with
+# the widest range of host drivers; the L4 (sm_89) is covered.
+#
+# Versions come from uv.lock (minus torch, which the lock pins to the CPU build), so the
+# image runs the same transformers etc. as CI. peft and accelerate are pinned here
+# too, to the same versions as pyproject.toml.
+FROM python:3.12-slim-bookworm
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.25 /uv /usr/local/bin/uv
+
+# Triton (bundled with torch) builds a small C helper the first time it runs on the GPU,
+# and torch 2.14 sends some eager ops (e.g. Qwen3's rotary embedding) to Triton kernels.
+# The slim image has no C compiler, so the first GPU run failed with "Failed to find C
+# compiler". Python's headers are already in the python image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc libc6-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# The GPU driver isn't in the image: on Vertex (as on GKE) it's mounted at /usr/local/nvidia.
+# These are the variables NVIDIA's own CUDA images set so the container runtime passes the
+# GPU in and programs find libcuda. Without them torch saw no GPU and ran on the CPU.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/nvidia/bin:$PATH \
+    UV_NO_CACHE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/tmp/hf
+
+ARG TORCH_VERSION=2.14.0
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126
+ARG PEFT_VERSION=0.21.1
+ARG ACCELERATE_VERSION=1.15.0
+
+RUN uv venv --python /usr/local/bin/python3.12 "$VIRTUAL_ENV" \
+ && uv pip install --index-url "$TORCH_INDEX" "torch==$TORCH_VERSION"
+
+COPY pyproject.toml uv.lock /tmp/lock/
+RUN cd /tmp/lock \
+ && uv export --frozen --no-dev --no-emit-project --no-emit-package torch \
+      --no-hashes --no-header --no-annotate -o /tmp/requirements.txt \
+ && uv pip install -r /tmp/requirements.txt \
+      "peft==$PEFT_VERSION" "accelerate==$ACCELERATE_VERSION" \
+ && rm -rf /tmp/lock /tmp/requirements.txt
+
+# Build check. The hard gate reads package metadata only, so it doesn't depend on the
+# build runner's CPU: on some GitHub runners (seen on AMD EPYC 7763) importing torch dies
+# with "Intel oneMKL FATAL ERROR: Cannot load .../libtorch_cpu.so", while on others it's
+# fine. The image runs on Vertex, not here, so a failed import doesn't fail the build; it
+# prints diagnostics under "=== TORCH IMPORT DIAGNOSTICS ===" instead.
+COPY <<'PY' /tmp/check.py
+import glob, importlib.metadata as md, os, subprocess, sys
+
+torch_version = md.version("torch")
+if "+cu" not in torch_version:
+    sys.exit(f"torch {torch_version} is not a CUDA build")
+print("torch", torch_version, "| transformers", md.version("transformers"), "| peft", md.version("peft"))
+cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), "?")
+flags = next((l.split(":", 1)[1].split() for l in open("/proc/cpuinfo") if l.startswith("flags")), [])
+print("build CPU:", cpu, "| avx512f:", "avx512f" in flags, "| avx2:", "avx2" in flags)
+cc = subprocess.run(["gcc", "--version"], capture_output=True, text=True)
+if cc.returncode != 0:
+    sys.exit("no C compiler: Triton can't build its GPU helper")
+print("C compiler:", cc.stdout.splitlines()[0])
+
+
+def run(label, code, env=None, argv=None):
+    cmd = argv or [sys.executable, "-c", code]
+    r = subprocess.run(cmd, capture_output=True, text=True, env={**os.environ, **(env or {})})
+    print(f"--- {label}: exit {r.returncode}")
+    return r
+
+
+r = run("import torch, transformers, peft", "import torch, transformers, peft; print('cuda', torch.version.cuda)")
+if r.returncode == 0:
+    print("import ok:", r.stdout.strip())
+    sys.exit(0)
+
+print("=== TORCH IMPORT DIAGNOSTICS ===")
+print(r.stdout[-1500:], r.stderr[-1500:])
+lib = glob.glob(os.path.join(sys.prefix, "lib/python3.12/site-packages/torch/lib/libtorch_cpu.so"))[0]
+r = run("ctypes.CDLL(libtorch_cpu.so)", f"import ctypes; ctypes.CDLL({lib!r}); print('loaded')")
+print(r.stdout[-1500:], r.stderr[-1500:])
+r = run("import torch only", "import torch; print('ok')")
+print(r.stdout[-500:], r.stderr[-500:])
+r = run("import torch, numpy blocked", "import sys; sys.modules['numpy'] = None; import torch; print('ok')")
+print(r.stdout[-500:], r.stderr[-500:])
+r = run("MKL_VERBOSE=1", "import torch; print('ok')", env={"MKL_VERBOSE": "1"})
+print(r.stdout[-1500:], r.stderr[-1500:])
+r = run("LD_DEBUG=libs", "import torch", env={"LD_DEBUG": "libs"})
+lines = (r.stdout + r.stderr).splitlines()
+print(*[l for l in lines if any(k in l.lower() for k in ("error", "cannot", "fatal", "mkl"))][-40:], sep="\n")
+print("[last 30 lines]", *lines[-30:], sep="\n")
+if subprocess.run(["sh", "-c", "apt-get update -qq && apt-get install -y -qq strace >/dev/null"]).returncode == 0:
+    r = run("strace", None, argv=["strace", "-f", "-e", "trace=openat,open,mmap,mprotect", "-o", "/tmp/strace.txt",
+                                  sys.executable, "-c", "import torch"])
+    tr = open("/tmp/strace.txt").read().splitlines() if os.path.exists("/tmp/strace.txt") else []
+    print(r.stderr[-500:])
+    print(*[l for l in tr if "= -1" in l and ("torch" in l or "mkl" in l or "ENOMEM" in l or "EPERM" in l)][-40:], sep="\n")
+    print("[strace last 40]", *tr[-40:], sep="\n")
+    subprocess.run(["sh", "-c", "apt-get purge -y -qq strace >/dev/null; rm -rf /var/lib/apt/lists/* /tmp/strace.txt"])
+print("=== END TORCH IMPORT DIAGNOSTICS ===")
+PY
+RUN python /tmp/check.py && rm /tmp/check.py

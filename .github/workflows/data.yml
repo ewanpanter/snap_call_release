@@ -1,0 +1,52 @@
+# Prepare the datasets on a GitHub runner (public data, CPU) and write JSONL to GCS.
+name: data
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra arguments for data/prepare.py"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      ARGS: ${{ inputs.args }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: prepare
+        run: uv run python data/prepare.py --out outputs/data $ARGS
+      - name: validate against the contract
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          from snapcall.schema import DataRecord, read_jsonl
+          for p in sorted(Path("outputs/data").glob("*.jsonl")):
+              print(p, sum(1 for _ in read_jsonl(p, DataRecord)))
+          PY
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: upload to scratch
+        run: gcloud storage cp -r outputs/data/* "$SCRATCH/data/"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-${{ github.run_id }}
+          path: outputs/
+          retention-days: 7

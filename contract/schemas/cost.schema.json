@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "ApiCost": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "minimum": 0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "raw_cost": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Cost"
+        },
+        "raw_currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Currency"
+        },
+        "requests": {
+          "minimum": 0,
+          "title": "Requests",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "provider",
+        "requests",
+        "cost"
+      ],
+      "title": "ApiCost",
+      "type": "object"
+    },
+    "ComputeCost": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "minimum": 0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "count": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "minutes": {
+          "minimum": 0,
+          "title": "Minutes",
+          "type": "number"
+        },
+        "rate_per_hour": {
+          "minimum": 0,
+          "title": "Rate Per Hour",
+          "type": "number"
+        },
+        "resource": {
+          "title": "Resource",
+          "type": "string"
+        },
+        "spot": {
+          "default": false,
+          "title": "Spot",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "resource",
+        "minutes",
+        "rate_per_hour",
+        "cost"
+      ],
+      "title": "ComputeCost",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "api": {
+      "items": {
+        "$ref": "#/$defs/ApiCost"
+      },
+      "title": "Api",
+      "type": "array"
+    },
+    "compute": {
+      "items": {
+        "$ref": "#/$defs/ComputeCost"
+      },
+      "title": "Compute",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "currency": {
+      "default": "GBP",
+      "title": "Currency",
+      "type": "string"
+    },
+    "job": {
+      "title": "Job",
+      "type": "string"
+    },
+    "n_decisions": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "N Decisions"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "system": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "System"
+    },
+    "total": {
+      "minimum": 0,
+      "title": "Total",
+      "type": "number"
+    }
+  },
+  "required": [
+    "run_id",
+    "job",
+    "created_at",
+    "total"
+  ],
+  "title": "Cost",
+  "type": "object"
+}

@@ -1,0 +1,44 @@
+# Tear down infra/main. RELEASE tier, dispatch only, needs typed confirmation.
+# infra/bootstrap is destroyed separately, by hand, from Cloud Shell (its README).
+name: infra-destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy snapcall" to confirm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-main
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    if: >-
+      github.ref == 'refs/heads/main' && vars.RELEASE_ACTOR != '' && github.actor == vars.RELEASE_ACTOR &&
+      github.triggering_actor == vars.RELEASE_ACTOR && inputs.confirm == 'destroy snapcall'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_RELEASE }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: destroy
+        working-directory: infra/main
+        run: |
+          terraform init -input=false -backend-config="bucket=${TF_VAR_project_id}-tfstate"
+          terraform destroy -input=false -auto-approve -no-color

@@ -1,0 +1,62 @@
+# Gemini baseline over the test set, via Vertex AI with IAM (no API key). Experiment tier.
+name: baseline-gemini
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra arguments for baselines.gemini_client (e.g. --limit 50)"
+        required: false
+        default: ""
+        type: string
+      data:
+        description: "Data file in the scratch bucket's data/ folder (e.g. cfpb_test.jsonl)"
+        required: false
+        default: "test.jsonl"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      SCRATCH: gs://${{ vars.GCP_PROJECT_ID }}-scratch
+      RUN_ID: gemini-${{ github.run_id }}-${{ github.run_attempt }}
+      ARGS: ${{ inputs.args }}
+      DATA_FILE: ${{ inputs.data }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked --group baselines
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_EXPERIMENT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: fetch the data file
+        run: |
+          # a plain name under data/ (one sub-folder at most), never a path out of it
+          [[ "$DATA_FILE" =~ ^[a-z0-9_-]+(/[a-z0-9_-]+)?\.jsonl$ ]] || { echo "bad data: $DATA_FILE"; exit 1; }
+          mkdir -p data_in outputs && gcloud storage cp "$SCRATCH/data/$DATA_FILE" data_in/data.jsonl
+      - name: run baseline
+        run: |
+          uv run --group baselines python -m baselines.gemini_client \
+            --project "$PROJECT" --region "$REGION" \
+            --data data_in/data.jsonl --run-id "$RUN_ID" --out outputs/ $ARGS
+      - name: keep a copy in scratch
+        if: always()
+        run: gcloud storage cp -r outputs/* "$SCRATCH/runs/$RUN_ID/outputs/" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: outputs-${{ env.RUN_ID }}
+          path: outputs/
+          retention-days: 7

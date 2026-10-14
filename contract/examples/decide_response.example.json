@@ -1,0 +1,10 @@
+{
+  "model": "snapcall-qwen3-4b-instruct-2507",
+  "answers": {
+    "queue": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.86, "technical": 0.09, "sales": 0.05}, "confidence": 0.93},
+    "priority": {"type": "score", "value": 1.45, "level": 1, "probabilities": {"0": 0.1, "1": 0.45, "2": 0.35, "3": 0.1}, "confidence": 0.88},
+    "is_billing": {"type": "yesno", "p_yes": 0.94, "confidence": 0.97}
+  },
+  "usage": {"input_tokens": 212, "output_tokens": 0},
+  "latency_ms": 38.7
+}

@@ -1,0 +1,62 @@
+[project]
+name = "snapcall"
+version = "0.1.0"
+description = "Toy System One decision model: shared-state parallel questions with restricted-logit readout"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "torch>=2.4",
+    "transformers>=4.51",  # first release with Qwen3
+    "peft==0.21.1",
+    "accelerate==1.15.0",
+    "bitsandbytes>=0.48",
+]
+
+[dependency-groups]
+baselines = [
+    "google-genai>=2.25.0",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "jsonschema>=4.21",
+    "pre-commit>=3.7",
+    "pyyaml>=6.0.3",
+    "matplotlib>=3.11.2",  # so CI runs the chart tests instead of skipping them
+]
+eval = [
+    "matplotlib>=3.11.2",
+]
+
+[project.scripts]
+snapcall-export-schemas = "snapcall.schema:export_json_schemas_cli"
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
+
+# CPU-only torch everywhere uv installs it (local machines and GitHub runners).
+# The GPU images in docker/ install their own CUDA build.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "real_weights: loads real Qwen3 weights from Hugging Face; CI only (run with --real-weights)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]

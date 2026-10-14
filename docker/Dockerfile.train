@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# Thin code layer for Vertex jobs, on top of the base image.
+#   docker build -f docker/Dockerfile.train --build-arg BASE_IMAGE=$AR/base:latest -t $AR/snapcall:TAG .
+# Runs `python -m MODULE ARGS` through docker/entrypoint.py, which copies outputs/ to
+# $SNAPCALL_OUTPUT_URI on exit. scripts/submit_job.py sets the container args and env.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+# Catch up with uv.lock if it has moved since the base was built. Usually a no-op; torch
+# stays the base image's CUDA build.
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project --no-emit-package torch \
+      --no-hashes --no-header --no-annotate -o /tmp/requirements.txt \
+ && uv pip install -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
+
+# Code only: the allowlist is in Dockerfile.train.dockerignore. Top-level packages
+# (eval, baselines, data) import the same way as under pytest (pythonpath ".").
+COPY . .
+ENV PYTHONPATH=/app/src:/app
+
+ENTRYPOINT ["python", "/app/docker/entrypoint.py"]

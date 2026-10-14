@@ -1,0 +1,215 @@
+{
+  "$defs": {
+    "ChoiceAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "choice": {
+          "pattern": "^[A-Za-z0-9_\\-]{1,64}$",
+          "title": "Choice",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "probabilities": {
+          "patternProperties": {
+            "^[A-Za-z0-9_\\-]{1,64}$": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          },
+          "title": "Probabilities",
+          "type": "object"
+        },
+        "type": {
+          "const": "choice",
+          "default": "choice",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "choice",
+        "probabilities"
+      ],
+      "title": "ChoiceAnswer",
+      "type": "object"
+    },
+    "ScoreAnswer": {
+      "additionalProperties": false,
+      "description": "``value`` is the expected level index, so it can fall between levels.\n``level`` is the most probable level index.",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "level": {
+          "minimum": 0,
+          "title": "Level",
+          "type": "integer"
+        },
+        "probabilities": {
+          "additionalProperties": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "title": "Probabilities",
+          "type": "object"
+        },
+        "type": {
+          "const": "score",
+          "default": "score",
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "level",
+        "probabilities"
+      ],
+      "title": "ScoreAnswer",
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "title": "Usage",
+      "type": "object"
+    },
+    "YesNoAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "p_yes": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "P Yes",
+          "type": "number"
+        },
+        "type": {
+          "const": "yesno",
+          "default": "yesno",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "p_yes"
+      ],
+      "title": "YesNoAnswer",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Answers are keyed by the request's question ids, in the same order.",
+  "properties": {
+    "answers": {
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]{1,64}$": {
+          "discriminator": {
+            "mapping": {
+              "choice": "#/$defs/ChoiceAnswer",
+              "score": "#/$defs/ScoreAnswer",
+              "yesno": "#/$defs/YesNoAnswer"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChoiceAnswer"
+            },
+            {
+              "$ref": "#/$defs/ScoreAnswer"
+            },
+            {
+              "$ref": "#/$defs/YesNoAnswer"
+            }
+          ]
+        }
+      },
+      "title": "Answers",
+      "type": "object"
+    },
+    "latency_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latency Ms"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "usage": {
+      "$ref": "#/$defs/Usage"
+    }
+  },
+  "required": [
+    "model",
+    "answers"
+  ],
+  "title": "DecideResponse",
+  "type": "object"
+}

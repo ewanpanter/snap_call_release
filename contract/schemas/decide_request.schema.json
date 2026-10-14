@@ -1,0 +1,193 @@
+{
+  "$defs": {
+    "ChoiceQuestion": {
+      "additionalProperties": false,
+      "description": "Pick one of the labelled options. Keys are what the answer returns.",
+      "properties": {
+        "options": {
+          "maxProperties": 26,
+          "minProperties": 2,
+          "patternProperties": {
+            "^[A-Za-z0-9_\\-]{1,64}$": {
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "type": {
+          "const": "choice",
+          "default": "choice",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "title": "ChoiceQuestion",
+      "type": "object"
+    },
+    "ScoreQuestion": {
+      "additionalProperties": false,
+      "description": "Place the state on an ordered scale. ``levels`` is ordered low to high.",
+      "properties": {
+        "levels": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Levels",
+          "type": "array"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "type": {
+          "const": "score",
+          "default": "score",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "levels"
+      ],
+      "title": "ScoreQuestion",
+      "type": "object"
+    },
+    "YesNoQuestion": {
+      "additionalProperties": false,
+      "description": "Is this statement true? ``yes``/``no`` optionally describe what each answer means.",
+      "properties": {
+        "no": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "No"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "type": {
+          "const": "yesno",
+          "default": "yesno",
+          "title": "Type",
+          "type": "string"
+        },
+        "yes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Yes"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "title": "YesNoQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``state`` is read once; every question is answered independently against it.\n\n``debias``: ``\"off\"`` = one branch per question; ``\"auto\"`` = the default number of\npermutations per type; an int K = up to K permutations per question.",
+  "properties": {
+    "debias": {
+      "anyOf": [
+        {
+          "enum": [
+            "off",
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
+        }
+      ],
+      "default": "auto",
+      "title": "Debias"
+    },
+    "questions": {
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]{1,64}$": {
+          "discriminator": {
+            "mapping": {
+              "choice": "#/$defs/ChoiceQuestion",
+              "score": "#/$defs/ScoreQuestion",
+              "yesno": "#/$defs/YesNoQuestion"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChoiceQuestion"
+            },
+            {
+              "$ref": "#/$defs/ScoreQuestion"
+            },
+            {
+              "$ref": "#/$defs/YesNoQuestion"
+            }
+          ]
+        }
+      },
+      "title": "Questions",
+      "type": "object"
+    },
+    "seed": {
+      "default": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "items": {},
+          "type": "array"
+        }
+      ],
+      "title": "State"
+    }
+  },
+  "required": [
+    "state",
+    "questions"
+  ],
+  "title": "DecideRequest",
+  "type": "object"
+}

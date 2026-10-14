@@ -1,0 +1,57 @@
+# Copy ungated Qwen3 weights from Hugging Face into every Vertex region's models bucket (no HF token).
+# RELEASE tier: main only, triggered by the repo owner (RELEASE_ACTOR), once per model.
+name: fetch-weights
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Hugging Face repo id"
+        required: true
+        type: choice
+        options:
+          - Qwen/Qwen3-0.6B
+          - Qwen/Qwen3-4B-Instruct-2507
+          - Qwen/Qwen3-8B
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fetch:
+    if: github.ref == 'refs/heads/main' && vars.RELEASE_ACTOR != '' && github.actor == vars.RELEASE_ACTOR && github.triggering_actor == vars.RELEASE_ACTOR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      MODEL: ${{ inputs.model }}
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      # Uploaded to the models bucket of every Vertex region, so jobs read weights locally.
+      # Home region: <project>-models; others: <project>-models-<region>.
+      HOME_REGION: ${{ vars.GCP_REGION }}
+      REGIONS: ${{ vars.VERTEX_REGIONS || vars.GCP_REGION }}
+    steps:
+      - name: free runner disk (8B is ~16 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # No checkout here, so there are no dependency files to key a cache on.
+          enable-cache: false
+      - name: download
+        run: uvx --from huggingface_hub hf download "$MODEL" --local-dir weights --exclude "original/*"
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.SA_RELEASE }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: upload to every region
+        run: |
+          rm -rf weights/.cache
+          for r in $REGIONS; do
+            if [ "$r" = "$HOME_REGION" ]; then B="$PROJECT-models"; else B="$PROJECT-models-$r"; fi
+            echo "== gs://$B/$MODEL/"
+            gcloud storage cp -r weights/* "gs://$B/$MODEL/"
+            gcloud storage ls -l "gs://$B/$MODEL/"
+          done

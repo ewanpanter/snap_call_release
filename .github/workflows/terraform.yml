@@ -1,0 +1,35 @@
+# terraform fmt/validate (no backend, no credentials), split out of pr.yml to save Actions
+# minutes: it only runs when infra/ changes.
+# Push-only on purpose (see pr.yml): nothing an outsider does can start it.
+name: terraform
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - name: fmt and validate (no backend, no credentials)
+        run: |
+          if [ ! -d infra ]; then echo "no infra/ yet"; exit 0; fi
+          terraform fmt -check -recursive infra
+          for d in infra/bootstrap infra/main; do
+            [ -d "$d" ] || continue
+            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" validate
+          done

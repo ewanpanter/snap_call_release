@@ -1,0 +1,37 @@
+# Secrets and credentials: never commit
+.env*
+*.pem
+*.key
+*.p12
+# Service-account key files and other stray JSON credentials.
+# Only the contract's JSON files and examples are allowed through.
+*.json
+!contract/**/*.json
+!tests/fixtures/**/*.json
+credentials*
+*-sa-key*
+
+# Terraform
+*.tfstate*
+.terraform/
+*.tfplan
+*.tfvars
+crash.log
+
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Run outputs (CI uploads these as Actions artifacts)
+outputs/
+data/raw/
+data/processed/
+*.safetensors
+*.bin
+hf_cache/

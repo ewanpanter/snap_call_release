@@ -1,0 +1,16 @@
+# Allowlist: code and the lock file only. No .git, .venv, outputs, data files or weights.
+# (BuildKit reads <Dockerfile>.dockerignore.)
+*
+!pyproject.toml
+!uv.lock
+!src/
+!baselines/
+!eval/
+!data/
+!scripts/
+!docker/entrypoint.py
+data/raw/
+data/processed/
+**/__pycache__/
+**/*.safetensors
+**/*.bin

@@ -1,0 +1,63 @@
+# LEGACY (superseded by the burst runner, run-gpu.yml; Decision 9).
+# Run any module on Vertex: gh workflow run experiment.yml -f script=eval.run_eval -f args="..." -f gpu=true
+# Weights: write {models} for the job region's models bucket, e.g.
+#   -f script=snapcall.decide -f args="smoke --model {models}/Qwen/Qwen3-4B-Instruct-2507"
+# Region: the VERTEX_REGION repo variable, or -f region=us-central1 / europe-west4 for one run.
+# For Qwen3-8B runs add -f machine_type=g2-standard-8 (the 16 GB of bf16 weights don't fit
+# comfortably in g2-standard-4's 16 GB of host RAM while loading).
+# This submits the Vertex job and exits in about a minute (Decision 2). When the job is done:
+#   gh workflow run fetch-results.yml -f run_id=exp-<this run's id>-<attempt>   (printed in the run summary)
+#   gh run download <fetch-results run id>   (outputs/ comes back as the outputs-<run_id> artifact)
+name: experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Python module to run as `python -m <script>` (e.g. eval.run_eval)"
+        required: true
+        type: string
+      args:
+        description: "Arguments passed to the module"
+        required: false
+        default: ""
+        type: string
+      gpu:
+        description: "Attach 1x L4"
+        required: false
+        default: true
+        type: boolean
+      machine_type:
+        description: "Vertex machine type for GPU runs (both have 1x L4). Use g2-standard-8 for 8B."
+        required: false
+        default: g2-standard-4
+        type: choice
+        options:
+          - g2-standard-4
+          - g2-standard-8
+      region:
+        description: "Vertex region (blank = the VERTEX_REGION repo variable). Must be in VERTEX_REGIONS."
+        required: false
+        default: ""
+        type: string
+      flex_start:
+        description: "GPU runs: queue up to 24h for a free L4 (flex-start) instead of failing and retrying"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  vertex:
+    uses: ./.github/workflows/vertex-job.yml
+    with:
+      module: ${{ inputs.script }}
+      args: ${{ inputs.args }}
+      gpu: ${{ inputs.gpu }}
+      machine_type: ${{ inputs.machine_type }}
+      run_id_prefix: exp
+      region: ${{ inputs.region }}
+      flex_start: ${{ inputs.flex_start }}

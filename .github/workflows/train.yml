@@ -1,0 +1,44 @@
+# LoRA train -> calibrate -> eval on a GCE burst-runner GPU (Decision 9). Creates the VM and
+# exits (Decision 2); the VM deletes itself when the job ends (2h at most).
+#   gh workflow run train.yml -f args="--model {models}/Qwen/Qwen3-4B-Instruct-2507 \
+#     --data gs://<project>-scratch/data --max-minutes 60"
+#   gh workflow run fetch-results.yml -f run_id=train-<run id>-<attempt> [-f wait_minutes=60]
+# See src/snapcall/train_lora.py for the args (--datasets/--tag for the transfer test).
+# The adapter, metrics and predictions come back in outputs/ (adapter/ is ~tens of MB).
+# Experiment tier.
+name: train
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Arguments for snapcall.train_lora ({models}/<org>/<name> for weights)"
+        required: true
+        type: string
+      machine_type:
+        description: "Both have 1x L4. Use g2-standard-8 for 8B."
+        required: false
+        default: g2-standard-4
+        type: choice
+        options:
+          - g2-standard-4
+          - g2-standard-8
+      regions:
+        description: "Try-list for this run only, space-separated, in order (blank = RUNNER_REGIONS)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  train:
+    uses: ./.github/workflows/run-gpu.yml
+    with:
+      script: snapcall.train_lora
+      args: ${{ inputs.args }}
+      machine_type: ${{ inputs.machine_type }}
+      regions: ${{ inputs.regions }}
+      run_id_prefix: train

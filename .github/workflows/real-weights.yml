@@ -1,0 +1,46 @@
+# Qwen3-0.6B on CPU with the real tokenizer, split out of pr.yml to save Actions
+# minutes: it only runs when the code it tests, its tests or the dependencies change.
+# Push-only on purpose (see pr.yml): nothing an outsider does can start it.
+name: real-weights
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "src/snapcall/**"
+      - "tests/conftest.py"
+      - "tests/fixtures/**"
+      - "tests/test_masking.py"
+      - "tests/test_decide.py"
+      - "tests/test_prompt.py"
+      - "tests/test_fixtures.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/real-weights.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-weights-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-weights:
+    # Qwen3-0.6B on CPU with the real tokenizer. CI only: it downloads real weights.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      HF_HOME: ${{ github.workspace }}/hf_cache
+      SNAPCALL_REAL_WEIGHTS_MODEL: Qwen/Qwen3-0.6B
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: hf_cache
+          key: hf-cache-${{ env.SNAPCALL_REAL_WEIGHTS_MODEL }}-v1
+      - run: uv sync --locked
+      - run: uv run pytest -q --real-weights -m real_weights

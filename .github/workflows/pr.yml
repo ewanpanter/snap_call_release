@@ -1,0 +1,49 @@
+# Credential-free checks on every push. No GCP access.
+#
+# Push-only on purpose: only accounts with write access can push,
+# so nothing an outsider does (a fork PR, a comment, an issue) can ever start this, or any
+# other, workflow. Same-repo PRs still show these results, because GitHub attaches the
+# branch's push checks to the PR. Never add PR-event triggers of any kind.
+name: pr
+
+# To save Actions minutes, lint + test skip pushes that only touch prose or images.
+# gitleaks runs on EVERY push from its own workflow
+# (gitleaks.yml); the Qwen3-0.6B test is real-weights.yml (core code only); terraform is
+# terraform.yml (infra/ only). Same push-only rule for all of them.
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.png"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -q

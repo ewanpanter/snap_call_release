@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "system": "snapcall-4b-zeroshot",
+  "run_id": "exp-20260927-01",
+  "dataset": "customer-support-tickets",
+  "split": "test",
+  "created_at": "2026-09-27T18:04:11Z",
+  "n_states": 800,
+  "n_questions": 3200,
+  "overall": {"n": 3200, "n_errors": 0, "accuracy": 0.612, "ece": 0.071, "brier": 0.52, "log_loss": 1.02},
+  "by_type": {
+    "choice": {"n": 1600, "accuracy": 0.55, "ece": 0.09, "brier": 0.61},
+    "score": {"n": 800, "accuracy": 0.41, "ece": 0.06, "brier": 0.7, "mae": 0.74},
+    "yesno": {
+      "n": 800, "accuracy": 0.9, "ece": 0.04, "brier": 0.15,
+      "reliability": [
+        {"lo": 0.5, "hi": 0.75, "count": 120, "mean_confidence": 0.64, "accuracy": 0.6},
+        {"lo": 0.75, "hi": 1.0, "count": 680, "mean_confidence": 0.93, "accuracy": 0.95}
+      ]
+    }
+  },
+  "by_question": {
+    "queue": {"n": 800, "accuracy": 0.58, "ece": 0.08},
+    "type": {"n": 800, "accuracy": 0.52, "ece": 0.1},
+    "priority": {"n": 800, "accuracy": 0.41, "ece": 0.06, "mae": 0.74},
+    "is_billing": {"n": 800, "accuracy": 0.9, "ece": 0.04}
+  },
+  "latency": {"n": 800, "mean_ms": 44.0, "p50_ms": 41.0, "p95_ms": 63.5},
+  "temperature": {"choice": 1.0, "score": 1.0, "yesno": 1.0},
+  "order_sensitivity": 0.07,
+  "extra": {"label_prior_entropy_bits": 1.96}
+}
