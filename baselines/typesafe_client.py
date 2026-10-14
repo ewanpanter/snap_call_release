@@ -9,10 +9,10 @@ printed, logged, or written to outputs.
 Endpoint: TypeSafe direct, ``POST https://api.typesafe.ai/v1/systemone`` with a Bearer key
 (same body as OpenRouter's Decisions API; ``--endpoint``/``--model`` switch to OpenRouter).
 
-Besides the contract outputs, every question is checked for odd responses (probabilities
-that don't sum to 1, a choice that isn't the most probable option, a score that isn't the
-expected level, ...). They are kept in each prediction's ``meta.anomalies`` and counted in
-``summary.json``, so the report can say how Jev actually behaves.
+Besides the contract outputs, every response is validated (probabilities that sum to 1, a
+choice that is the most probable option, a score at an expected level, ...). Anything that
+fails is flagged in each prediction's ``meta.anomalies`` and counted in ``summary.json``, so
+malformed responses are visible.
 """
 
 from __future__ import annotations
